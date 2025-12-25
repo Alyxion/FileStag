@@ -17,7 +17,7 @@ from filestag.protocols import (
     FILE_PATH_PROTOCOL_URL_HEADER,
     ZIP_SOURCE_PROTOCOL,
 )
-from filestag.web import web_fetch
+from filestag.web import web_fetch, web_fetch_async
 
 FileSourceTypes = Union[str, SecretStr, bytes]
 """
@@ -317,3 +317,251 @@ class FileStag:
         ):
             return web_fetch(filename, **params) is not None
         return os.path.exists(filename)
+
+    # Async variants
+
+    @classmethod
+    async def load_async(
+        cls, source: FileSourceTypes, as_stream: bool = False, **params
+    ) -> bytes | BytesIO | None:
+        """
+        Asynchronously loads a file by filename from a local file, a registered
+        web archive or the web.
+
+        :param source: The file's source such as a local filename or URL.
+            See :class:`FileNameType`
+        :param as_stream: If True, return a BytesIO stream instead of bytes
+        :param params: Advanced loading params passed to the file loader such
+            as ``timeout_s`` or ``max_cache_age`` for files from the web.
+        :return: The data if the file could be found
+        """
+        import aiofiles
+        import aiofiles.os
+
+        def bundle(result: bytes | None) -> bytes | BytesIO | None:
+            if result is not None and as_stream:
+                return BytesIO(result)
+            return result
+
+        if isinstance(source, bytes):
+            return bundle(source)
+        source = cls.resolve_name(source)
+        from filestag.shared_archive import SharedArchive
+
+        if source.startswith(ZIP_SOURCE_PROTOCOL):
+            return bundle(SharedArchive.load_file(source))
+        if source.startswith(HTTP_PROTOCOL_URL_HEADER) or source.startswith(
+            HTTPS_PROTOCOL_URL_HEADER
+        ):
+            return bundle(await web_fetch_async(source, **params))
+        if await aiofiles.os.path.exists(source):
+            async with aiofiles.open(source, "rb") as f:
+                return bundle(await f.read())
+        else:
+            return None
+
+    @classmethod
+    async def save_async(cls, target: FileTargetTypes, data: bytes, **_) -> bool:
+        """
+        Asynchronously saves data to a file.
+
+        :param target: The file's target name, see :meth:`load_file`.
+        :param data: The data to be stored
+        :return: True on success
+        """
+        import aiofiles
+
+        if data is None:
+            raise ValueError("No data provided")
+        target = cls.resolve_name(target)
+        if not cls.is_simple(target):
+            raise NotImplementedError(
+                "At the moment only local file storage is supported"
+            )
+        try:
+            async with aiofiles.open(target, "wb") as output_file:
+                await output_file.write(data)
+        except (FileNotFoundError, IOError):
+            return False
+        return True
+
+    @classmethod
+    async def delete_async(cls, target: FileTargetTypes, **params) -> bool:
+        """
+        Asynchronously deletes a file.
+
+        :param target: The file's target name, see :meth:`load_file` for
+            the supported protocols.
+        :param params: The advanced storage parameters, depending on the
+            type of storage, such as timeout_s for file's stored via network.
+        :return: True on success
+        """
+        import aiofiles.os
+
+        target = cls.resolve_name(target)
+        if not cls.is_simple(target):
+            raise NotImplementedError(
+                "At the moment only local file deletion is supported"
+            )
+        try:
+            await aiofiles.os.remove(target)
+        except FileNotFoundError:
+            return False
+        return True
+
+    @classmethod
+    async def load_text_async(
+        cls,
+        source: FileSourceTypes,
+        encoding: str = "utf-8",
+        crlf: bool | None = None,
+        **params,
+    ) -> str | None:
+        """
+        Asynchronously loads a text file from a given file source.
+
+        :param source: The file's source, see :meth:`load_file`.
+        :param encoding: The text encoding. utf-8 by default
+        :param crlf: Defines if Windows line endings shall be used or suppressed.
+            * None = Keep current state
+            * False = Linux line endings only (newline)
+            * True = Windows line endings only (carriage return, newline)
+        :param params: The advanced loading parameters, file source dependent,
+            e.g. timeout_s for a timeout from file's from the web.
+        :return: The file's content
+        """
+        source = cls.resolve_name(source)
+        data = await cls.load_async(source, **params)
+        if data is None:
+            return None
+        result = data.decode(encoding=encoding)
+        if crlf is not None:
+            result = result.replace("\r\n", "\n")
+            if crlf:
+                result = result.replace("\n", "\r\n")
+        return result
+
+    @classmethod
+    async def save_text_async(
+        cls, target: FileTargetTypes, text: str, encoding: str = "utf-8", **params
+    ) -> bool:
+        """
+        Asynchronously saves text data to a file.
+
+        :param target: The file's target, see :meth:`save_file`.
+        :param text: The text to be stored
+        :param encoding: The encoding to use. utf-8 by default.
+        :param params: The advanced storage parameters, depending on the
+            type of storage, such as timeout_s for file's stored via network.
+        :return: True on success
+        """
+        if text is None:
+            raise ValueError("No data provided")
+        target = cls.resolve_name(target)
+        encoded_text = text.encode(encoding=encoding)
+        return await cls.save_async(target, data=encoded_text, **params)
+
+    @classmethod
+    async def load_json_async(
+        cls, source: FileSourceTypes, encoding: str = "utf-8", **params
+    ) -> dict | None:
+        """
+        Asynchronously loads a json dictionary from a given file source.
+
+        :param source: The file's source, see :meth:`load_file`.
+        :param encoding: The text encoding. utf-8 by default
+        :param params: The advanced loading parameters, file source dependent,
+            e.g. timeout_s for a timeout from file's from the web.
+        :return: The file's content
+        """
+        source = cls.resolve_name(source)
+        data = await cls.load_async(source, **params)
+        if data is None:
+            return None
+        data = data.decode(encoding=encoding)
+        return json.loads(data)
+
+    @classmethod
+    async def save_json_async(
+        cls,
+        target: FileTargetTypes,
+        data: dict,
+        indent: int | None = None,
+        encoding: str = "utf-8",
+        **params,
+    ) -> bool:
+        """
+        Asynchronously saves json data to a file target.
+
+        :param target: The file's target. See :class:`FileNameType`
+        :param data: The dictionary to be stored
+        :param indent: The json indenting. None by default
+        :param encoding: The encoding to use. utf-8 by default.
+        :param params: The advanced storage parameters, depending on the
+            type of storage, such as timeout_s for file's stored via network.
+        :return: True on success
+        """
+        if data is None:
+            raise ValueError("No data provided")
+        target = cls.resolve_name(target)
+        text = json.dumps(data) if indent is None else json.dumps(data, indent=indent)
+        encoded_text = text.encode(encoding=encoding)
+        return await cls.save_async(target, data=encoded_text, **params)
+
+    @classmethod
+    async def copy_async(
+        cls,
+        source: FileSourceTypes,
+        target: FileTargetTypes,
+        create_dir: bool = False,
+        **params,
+    ) -> bool:
+        """
+        Asynchronously copies a file from given source to given target location.
+
+        :param source: The source location
+        :param target: The target location
+        :param create_dir: Defines if a directory of the target
+            shall be created if needed
+        :param params: The parameters to be passed to the source loader, e.g.
+            max_cache_age etc.
+        :return: True on success
+        """
+        import aiofiles.os
+
+        source = cls.resolve_name(source)
+        target = cls.resolve_name(target)
+        if cls.is_simple(target):
+            dirname = os.path.dirname(target)
+            if not await aiofiles.os.path.exists(dirname):
+                if create_dir:
+                    await aiofiles.os.makedirs(dirname, exist_ok=True)
+                else:
+                    return False
+        data = await cls.load_async(source, **params)
+        if data is None:
+            return False
+        return await cls.save_async(target, data)
+
+    @classmethod
+    async def exists_async(cls, filename: FileSourceTypes, **params) -> bool:
+        """
+        Asynchronously verifies if a file exists.
+
+        :param filename: The file's source such as a local filename or URL.
+            See :class:`FileNameType`
+        :param params: Advanced parameters, protocol dependent
+        :return: True if the file exists
+        """
+        import aiofiles.os
+
+        filename = cls.resolve_name(filename)
+        from filestag.shared_archive import SharedArchive
+
+        if filename.startswith(ZIP_SOURCE_PROTOCOL):
+            return SharedArchive.exists_at_source(filename)
+        if filename.startswith(HTTP_PROTOCOL_URL_HEADER) or filename.startswith(
+            HTTPS_PROTOCOL_URL_HEADER
+        ):
+            return await web_fetch_async(filename, **params) is not None
+        return await aiofiles.os.path.exists(filename)

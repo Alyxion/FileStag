@@ -4,6 +4,7 @@ Web cache for temporary storage of downloaded files.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import shutil
@@ -175,3 +176,118 @@ class WebCache:
             except FileNotFoundError:
                 pass
             os.makedirs(cls.cache_dir, exist_ok=True)
+
+    # Async variants
+    _async_lock: asyncio.Lock | None = None
+
+    @classmethod
+    def _get_async_lock(cls) -> asyncio.Lock:
+        """Get or create the async lock."""
+        if cls._async_lock is None:
+            cls._async_lock = asyncio.Lock()
+        return cls._async_lock
+
+    @classmethod
+    async def fetch_async(cls, url: str, max_age: float) -> bytes | None:
+        """
+        Asynchronously tries to fetch a file from the cache.
+
+        :param url: The original url
+        :param max_age: The maximum age in seconds
+        :return: On success the file's content
+        """
+        import aiofiles
+        import aiofiles.os
+
+        encoded_name = cls.encoded_name(url)
+        full_name = cls.cache_dir + encoded_name
+        try:
+            async with cls._get_async_lock():
+                if await aiofiles.os.path.exists(full_name):
+                    if file_age_in_seconds(full_name) <= max_age:
+                        async with aiofiles.open(full_name, "rb") as f:
+                            return await f.read()
+                    await cls.remove_outdated_file_async(full_name)
+                return None
+        except FileNotFoundError:
+            return None
+
+    @classmethod
+    async def remove_outdated_file_async(cls, full_name: str) -> None:
+        """
+        Asynchronously removes an outdated file from the cache.
+
+        :param full_name: The file's name
+        """
+        import aiofiles.os
+
+        stat = await aiofiles.os.stat(full_name)
+        cls.total_size -= stat.st_size
+        await aiofiles.os.remove(full_name)
+
+    @classmethod
+    async def store_async(cls, url: str, data: bytes) -> None:
+        """
+        Asynchronously caches the new web element on disk.
+
+        :param url: The url of the file being stored
+        :param data: The data of the file being stored as bytes string
+        """
+        import aiofiles
+        import aiofiles.os
+
+        if not cls.cleaned:
+            await cls.cleanup_async()
+        async with cls._get_async_lock():
+            cls.files_stored += 1
+            if cls.files_stored == 1:
+                await aiofiles.os.makedirs(cls.cache_dir, exist_ok=True)
+            if cls.total_size >= cls.max_cache_size:
+                await cls.flush_async()
+            encoded_name = cls.encoded_name(url)
+            full_name = cls.cache_dir + encoded_name
+            async with aiofiles.open(full_name, "wb") as file:
+                await file.write(data)
+            cls.total_size += len(data)
+
+    @classmethod
+    async def cleanup_async(cls) -> None:
+        """
+        Asynchronously cleans up the cache and removes old files.
+        """
+        import aiofiles.os
+
+        async with cls._get_async_lock():
+            cls.cleaned = True
+            try:
+                files = await aiofiles.os.listdir(cls.cache_dir)
+            except FileNotFoundError:
+                files = []
+            cur_time = time.time()
+            cls.total_size = 0
+            for cur_file in files:
+                full_name = cls.cache_dir + cur_file
+                stat = await aiofiles.os.stat(full_name)
+                if await aiofiles.os.path.isdir(full_name):
+                    continue
+                if cur_time - stat.st_mtime > cls.max_general_age:
+                    await aiofiles.os.remove(full_name)
+                else:
+                    cls.total_size += stat.st_size
+            if cls.total_size >= cls.max_cache_size:
+                await cls.flush_async()
+
+    @classmethod
+    async def flush_async(cls) -> None:
+        """
+        Asynchronously cleans the cache completely.
+        """
+        import aiofiles.os
+
+        async with cls._get_async_lock():
+            cls.total_size = 0
+            try:
+                await asyncio.to_thread(shutil.rmtree, cls.cache_dir)
+            except FileNotFoundError:
+                pass
+            await aiofiles.os.makedirs(cls.cache_dir, exist_ok=True)

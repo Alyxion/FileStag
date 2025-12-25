@@ -996,3 +996,147 @@ class FileSource:
         etc. if applicable.
         """
         self.is_closed = True
+
+    # Async variants
+
+    async def _read_file_int_async(self, filename: str) -> bytes | None:
+        """
+        Asynchronously reads a file from this file source, identified by name.
+
+        Default implementation falls back to sync version in a thread pool.
+        Subclasses can override for native async I/O.
+
+        :param filename: The name of the file to read
+        :return: The file's content on success, None otherwise
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self._read_file_int, filename)
+
+    async def fetch_async(self, filename: str) -> bytes | None:
+        """
+        Asynchronously reads a file from this file source, identified by name.
+
+        Note: Not all FileSources support direct file access by name, so you
+        should always prefer to just iterate through a FileSource object rather
+        than accessing single files if your FileSource can be freely configured.
+
+        :param filename: The name of the file to read
+        :return: The file's content on success, None otherwise
+        """
+        from filestag.web import WebCache
+
+        if self.max_web_cache_age != 0:  # try to fetch data if cache is on
+            unique_name = self._get_source_identifier() + "/" + filename
+            data = await WebCache.fetch_async(unique_name, max_age=self.max_web_cache_age)
+            if data is not None:
+                return data
+        result = await self._read_file_int_async(filename)
+        if self.max_web_cache_age != 0 and result is not None:  # store new data if cache is on
+            unique_name = self._get_source_identifier() + "/" + filename
+            await WebCache.store_async(unique_name, result)
+        return result
+
+    async def copy_async(
+        self,
+        filename: str,
+        target_name: str,
+        overwrite: bool = True,
+        sink: Union["FileSink", None] = None,
+        on_fetch: Callable[[str], None] | None = None,
+        on_fetch_done: Callable[[str, int], None] | None = None,
+        on_stored: Callable[[str, int], None] | None = None,
+        on_error: Callable[[str, str], None] | None = None,
+        on_skip: Callable[[str], None] | None = None,
+    ) -> bool:
+        """
+        Asynchronously copies a file from this FileSource to a FileStag
+        compatible target path.
+
+        :param filename: The name of the file to be copied
+        :param target_name: The target path
+        :param overwrite: Defines if the file shall be overwritten if it does
+            already exist.
+        :param sink: If defined the file will be copied to the specified sink
+        :param on_skip: Is called if a file exists and will be skipped
+        :param on_stored: Is called when ever a file was successfully uploaded
+        :param on_fetch: Is called before a file is downloaded
+        :param on_fetch_done: Is called after a file was
+            successfully downloaded and will now be uploaded or stored.
+        :param on_error: Is called when an error occurred
+        :return: True if the file was copied
+        """
+        if sink is None and not overwrite and await FileStag.exists_async(target_name):
+            if on_skip is not None:
+                on_skip(target_name)
+            return False
+        if on_fetch is not None:
+            on_fetch(filename)
+        data = await self.fetch_async(filename)
+        if data is None:
+            if on_error is not None:
+                on_error(filename, f"Could not load {filename}")
+            return False
+        if on_fetch_done is not None:
+            on_fetch_done(filename, len(data))
+        if sink is not None:
+            # FileSink.store is sync, wrap in thread for now
+            import asyncio
+
+            result = await asyncio.to_thread(
+                sink.store, target_name, data, overwrite=overwrite
+            )
+        else:
+            result = await FileStag.save_async(target_name, data)
+        if result:
+            if on_stored is not None:
+                on_stored(filename, len(data))
+        else:
+            if on_error is not None:
+                on_error(filename, f"Could not store {filename}")
+        return result
+
+    async def load_file_list_async(self, source: bytes | str, version: int = -1) -> bool:
+        """
+        Asynchronously tries to load the file list from file.
+
+        :param source: The file list source. Any FileStag compatible data
+            source.
+        :param version: The user defined version number. It can be passed
+            to enforce updating the list when ever this number is changed.
+
+            If -1 is passed the version is ignored.
+        :return: True if a valid list could be loaded.
+        """
+        if not isinstance(source, bytes):
+            source = await FileStag.load_async(source)
+        if source is None:
+            return False
+        try:
+            data = json.loads(source.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False
+        if not isinstance(data, dict) or data.get("format_version") != 1:
+            return False
+        if version != -1 and data.get(CACHE_VERSION, -1) != version:
+            return False
+        files = data.get("files", [])
+        self.update_file_list(
+            [FileListEntry.model_validate(entry) for entry in files],
+            may_sort=False,
+        )
+        return True
+
+    async def save_file_list_async(self, target: str, version: int = -1) -> None:
+        """
+        Asynchronously saves the file list to a file so it can be quickly
+        restored after a restart of the application.
+
+        :param target: The FileStag compatible file target, e.g. a local file
+            name
+        :param version: The user defined version number. It can be passed
+            to enforce updating the list when ever this number is changed.
+
+            If -1 is passed the version is ignored.
+        """
+        await FileStag.save_async(target, self.encode_file_list(version=version))

@@ -48,8 +48,7 @@ class FileSourceDisk(FileSource):
         if os.path.exists(full_filename):
             with open(full_filename, "rb") as cur_file:
                 return cur_file.read()
-        else:
-            raise FileNotFoundError(f"Could not find {full_filename}")
+        return None
 
     def handle_fetch_file_list(self, force: bool = False) -> None:
         if self._file_list is not None and not force:

@@ -145,3 +145,51 @@ class FileSink:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
+
+    # Async variants
+
+    async def _store_int_async(
+        self,
+        filename: str,
+        data: bytes,
+        overwrite: bool,
+        options: FileStorageOptions | None = None,
+    ) -> bool:
+        """
+        Asynchronous internal storage function.
+
+        Default implementation falls back to sync version in a thread pool.
+        Subclasses can override for native async I/O.
+
+        :param filename: The name of the file to be stored
+        :param data: The data to be stored
+        :param overwrite: Defines if the file may be overwritten
+        :param options: Advanced storage and file options
+        :return: True on success
+        """
+        import asyncio
+
+        return await asyncio.to_thread(
+            self._store_int, filename, data, overwrite=overwrite, options=options
+        )
+
+    async def store_async(
+        self,
+        filename: str,
+        data: bytes,
+        overwrite: bool = True,
+        options: FileStorageOptions | None = None,
+    ) -> bool:
+        """
+        Asynchronously stores a single file in the file sink.
+
+        :param filename: The file's name
+        :param data: The data to be stored
+        :param overwrite: Defines if the file may be overwritten if it does
+            already exist.
+        :param options: Advanced storage and file options
+        :return: True on success
+        """
+        return await self._store_int_async(
+            filename, data, overwrite=overwrite, options=options
+        )

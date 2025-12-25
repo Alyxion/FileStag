@@ -177,3 +177,96 @@ class DiskCache:
             key, eff_version = Cache.get_key_and_version(key, self._version)
             cache_name = self.get_cache_name(key)
             return FileStag.exists(cache_name)
+
+    # Async variants
+
+    async def _ensure_cache_dir_async(self) -> None:
+        """
+        Asynchronously verifies the caching directory is present.
+        """
+        import aiofiles.os
+
+        with self._access_lock:
+            if not self.dir_created:
+                await aiofiles.os.makedirs(self.cache_dir, exist_ok=True)
+
+    async def clear_async(self) -> None:
+        """
+        Asynchronously clears the disk cache completely.
+        """
+        import asyncio
+
+        with self._access_lock:
+            try:
+                await asyncio.to_thread(shutil.rmtree, self.cache_dir)
+            except FileNotFoundError:
+                pass
+
+    async def set_async(self, key: str, value: Any, version: int | str = 1) -> None:
+        """
+        Asynchronously persists a single value in the cache.
+
+        :param key: The name of the object to cache or a combination of
+            key and version separated by an @ sign, e.g. "database@1"
+        :param value: The element's value
+        :param version: The cache version for this entry.
+        """
+        from filestag.cache.cache import Cache
+
+        key, eff_version = Cache.get_key_and_version(key, self._version, version)
+        with self._access_lock:
+            params = {"__version": eff_version}
+            await self._ensure_cache_dir_async()
+            cache_name = self.get_cache_name(key)
+            bundle_fn = cache_name + BUNDLE_EXTENSION
+            await FileStag.save_async(cache_name, _bundle.bundle({"data": value, "version": 1}))
+            await FileStag.save_async(bundle_fn, _bundle.bundle(params))
+
+    async def get_async(self, key: str, version: int | str = 1, default: Any = None) -> Any | None:
+        """
+        Asynchronously tries to read an element from the disk cache.
+
+        :param key: The name of the object to load from cache or a combination
+            of key and version separated by an @ sign, e.g. "database@1"
+        :param version: The assumed version of this element we are searching
+            for. If the version does not match the old entry is ignored.
+        :param default: The default value to return if no cache entry could
+            be found
+        :return: Either the cache data or the default value as fallback
+        """
+        from filestag.cache.cache import Cache
+
+        with self._access_lock:
+            key, eff_version = Cache.get_key_and_version(key, self._version, version)
+            cache_name = self.get_cache_name(key)
+            params = {"__version": eff_version}
+            stream_data = await FileStag.load_async(cache_name)
+            if stream_data is None:
+                return default
+            bundle_data = _bundle.unbundle(stream_data)
+            if bundle_data.get("version", 0) != 1:
+                return default
+            data = bundle_data["data"]
+            bundle_fn = cache_name + BUNDLE_EXTENSION
+            if await FileStag.exists_async(bundle_fn):
+                bundle_file_data = await FileStag.load_async(bundle_fn)
+                if bundle_file_data:
+                    stored_params = _bundle.unbundle(bundle_file_data)
+                    if stored_params != params:
+                        return default
+            return data
+
+    async def delete_async(self, key: str) -> bool:
+        """
+        Asynchronously deletes a single cache entry.
+
+        :param key: The cache's key
+        :return: True if the element was found and deleted
+        """
+        with self._access_lock:
+            cache_name = self.get_cache_name(key)
+            bundle_fn = cache_name + BUNDLE_EXTENSION
+            await FileStag.delete_async(bundle_fn)
+            if await FileStag.exists_async(cache_name):
+                return await FileStag.delete_async(cache_name)
+            return False

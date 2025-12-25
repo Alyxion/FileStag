@@ -40,7 +40,7 @@ from filestag.protocols import (
 )
 
 # Web submodule
-from filestag.web import WebCache, web_fetch
+from filestag.web import WebCache, web_fetch, web_fetch_async
 
 # Cache submodule
 from filestag.cache import Cache, CacheRef, DiskCache, get_global_cache
@@ -76,6 +76,7 @@ __all__ = [
     # Web
     "WebCache",
     "web_fetch",
+    "web_fetch_async",
     # Cache
     "Cache",
     "CacheRef",

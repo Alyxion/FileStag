@@ -1,0 +1,1 @@
+"""FileStag test suite."""

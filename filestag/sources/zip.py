@@ -79,7 +79,7 @@ class FileSourceZip(FileSource):
             try:
                 return self.zip_archive.read(self.search_path + filename)
             except KeyError:
-                raise FileNotFoundError(f"Could not find {filename}")
+                return None
 
     def exists(self, filename: str) -> bool:
         with self.access_lock:
