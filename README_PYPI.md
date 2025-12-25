@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/filestag.svg)](https://pypi.org/project/filestag/)
 [![Python Versions](https://img.shields.io/badge/python-3.12+-blue.svg)](https://pypi.org/project/filestag/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/scistag/filestag/blob/main/LICENSE)
 [![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 **FileStag** is a high-performance, unified file access library for Python. It provides a consistent API for reading, writing, and managing files across different storage backends—including the local filesystem, ZIP archives, HTTP/HTTPS URLs, and Azure Blob Storage.
@@ -211,4 +211,4 @@ Contributions are welcome!
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/scistag/filestag/blob/main/LICENSE) file for details.

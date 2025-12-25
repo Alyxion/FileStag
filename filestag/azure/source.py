@@ -247,6 +247,42 @@ class AzureStorageFileSource(FileSource):
         elements = sorted(cleaned_list, key=lambda element: element.filename)
         self.update_file_list(elements)
 
+    def get_latest_modified_timestamp(self) -> str | None:
+        """
+        Returns the latest modification timestamp from Azure by doing a
+        lightweight list operation.
+
+        This checks if any files have been modified since the cache was created.
+        It also compares file counts if available.
+
+        :return: ISO format timestamp of the most recently modified file,
+            or None if no files exist or an error occurs.
+        """
+        try:
+            # First, do a quick count check if we have cached count
+            # This is fast and catches additions/deletions
+            blobs = list(self.container_client.list_blobs(
+                name_starts_with=self.search_path,
+                results_per_page=1000,  # Fetch enough to compare
+                timeout=self.timeout,
+            ))
+
+            # Count check: if count differs, definitely stale
+            if self._cached_file_count is not None:
+                if len(blobs) != self._cached_file_count:
+                    # Return a future timestamp to force invalidation
+                    import datetime
+                    return datetime.datetime.max.isoformat()
+
+            if not blobs:
+                return None
+
+            # Find the latest modified blob
+            latest = max(blobs, key=lambda b: b.last_modified)
+            return latest.last_modified.isoformat()
+        except Exception:
+            return None
+
     def close(self):
         if self.is_closed:
             return

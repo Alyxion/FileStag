@@ -1,8 +1,8 @@
 # FileStag
 
 [![PyPI version](https://img.shields.io/pypi/v/filestag.svg)](https://pypi.org/project/filestag/)
-[![Python Versions](https://img.shields.io/badge/python-3.12+-blue.svg)](https://pypi.org/project/filestag/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python Versions](https://img.shields.io/badge/python-{{PYTHON_VERSION}}+-blue.svg)](https://pypi.org/project/filestag/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]({{GITHUB_PREFIX}}LICENSE)
 [![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 **FileStag** is a high-performance, unified file access library for Python. It provides a consistent API for reading, writing, and managing files across different storage backends—including the local filesystem, ZIP archives, HTTP/HTTPS URLs, and Azure Blob Storage.
@@ -67,7 +67,7 @@ if FileStag.exists("hello.txt"):
 Read and write JSON with zero boilerplate.
 
 ```python
-data = {"name": "FileStag", "version": "0.1.0"}
+data = {"name": "FileStag", "version": "{{VERSION}}"}
 
 # Save dictionary as JSON
 FileStag.save_json("config.json", data, indent=4)
@@ -211,4 +211,4 @@ Contributions are welcome!
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE]({{GITHUB_PREFIX}}LICENSE) file for details.

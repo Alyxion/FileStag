@@ -125,6 +125,7 @@ class FileSource:
         max_web_cache_age: float = 0.0,
         dont_load: bool = False,
         sorting_callback: Callable[[FileListEntry], Any] | None = None,
+        validate_cache: bool = False,
     ):
         """
         For a detailed parameter description see :meth:`from_path`
@@ -208,6 +209,22 @@ class FileSource:
             else:
                 self._file_list_name = file_list_name
         self.max_web_cache_age = max_web_cache_age
+        self.validate_cache = validate_cache
+        """
+        If True and file_list_name is set, validates the cached file list
+        by checking if any files have been modified since the cache was created.
+        Only effective for sources that support this (e.g., Azure Blob Storage).
+        """
+        self._cached_latest_modified: str | None = None
+        """
+        The latest modification timestamp from the cached file list.
+        Used for cache validation.
+        """
+        self._cached_file_count: int | None = None
+        """
+        The file count from the cached file list.
+        Used for cache validation.
+        """
         self.download = self.copy
         self.download_all = self.copy_to
 
@@ -225,6 +242,7 @@ class FileSource:
         file_list_name: str | tuple[str, int] | None = None,
         max_web_cache_age: float = 0.0,
         dont_load: bool = False,
+        validate_cache: bool = False,
     ) -> "FileSource | None":
         """
         Auto-detects the required FileSource implementation for a given source
@@ -295,6 +313,11 @@ class FileSource:
         :param dont_load: If set to true the iterator will not provide the
             file's content but just iterate the filenames. Helpful if the
             consumer for example requires a path to files stored on disk.
+        :param validate_cache: If True and file_list_name is set, validates
+            the cached file list by checking if any files have been modified
+            since the cache was created. If changes are detected, the cache
+            is automatically refreshed. Only effective for sources that
+            support this feature (e.g., Azure Blob Storage).
         :return: The FileSource implementation for your path. None if the path
             can not be identified.
         """
@@ -310,6 +333,7 @@ class FileSource:
             "max_file_count": max_file_count,
             "sorting_callback": sorting_callback,
             "dont_load": dont_load,
+            "validate_cache": validate_cache,
         }
         if isinstance(source, SecretStr):
             source = source.get_secret_value()
@@ -408,9 +432,18 @@ class FileSource:
         :return: The encoded file list
         """
         file_list_data = [entry.model_dump(mode="json") for entry in self._file_list]
+        # Find latest modification timestamp for cache validation
+        latest_modified: str | None = None
+        for entry in self._file_list:
+            if entry.modified is not None:
+                mod_str = entry.modified.isoformat()
+                if latest_modified is None or mod_str > latest_modified:
+                    latest_modified = mod_str
         data = {
             "format_version": 1,
             CACHE_VERSION: version,
+            "latest_modified": latest_modified,
+            "file_count": len(self._file_list),
             "files": file_list_data,
         }
         return json.dumps(data).encode("utf-8")
@@ -439,6 +472,9 @@ class FileSource:
             return False
         if version != -1 and data.get(CACHE_VERSION, -1) != version:
             return False
+        # Store cache metadata for validation
+        self._cached_latest_modified = data.get("latest_modified")
+        self._cached_file_count = data.get("file_count")
         files = data.get("files", [])
         self.update_file_list(
             [FileListEntry.model_validate(entry) for entry in files],
@@ -911,6 +947,19 @@ class FileSource:
             before already
         """
 
+    def get_latest_modified_timestamp(self) -> str | None:
+        """
+        Returns the latest modification timestamp from the source.
+
+        This method can be overridden by subclasses to provide an efficient
+        way to check if any files have been modified since the cache was
+        created, without fetching the full file list.
+
+        :return: ISO format timestamp of the most recently modified file,
+            or None if not supported by this source type.
+        """
+        return None
+
     def _create_file_list_int(self, no_cache: bool = False) -> None:
         """
         Creates the file list by either scanning the source directory or
@@ -922,10 +971,21 @@ class FileSource:
             e.g. when this function is called from :meth:`refresh`.
         """
         loaded = False
+        cache_valid = True
         if self._file_list_name is not None and not no_cache:
             loaded = self.load_file_list(
                 self._file_list_name, version=self._file_list_version
             )
+            # Validate cache freshness if requested
+            if loaded and self.validate_cache and self._cached_latest_modified:
+                current_latest = self.get_latest_modified_timestamp()
+                if current_latest is not None:
+                    if current_latest > self._cached_latest_modified:
+                        # Source has newer files, invalidate cache
+                        loaded = False
+                        cache_valid = False
+                        self._file_list = None
+                        self._file_set = None
         if not loaded:
             self.handle_fetch_file_list()
         if not loaded and self._file_list_name is not None:

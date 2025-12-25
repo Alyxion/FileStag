@@ -437,3 +437,187 @@ class TestAzureAsync:
         with open(target_file, "rb") as f:
             assert f.read() == test_data
         source.close()
+
+
+@pytest.mark.skipif(not AZURE_CONFIGURED, reason="Azure credentials not configured")
+class TestAzureCacheValidation:
+    """Tests for Azure file list cache validation with automatic invalidation."""
+
+    def test_cache_validation_detects_new_files(self, temp_dir):
+        """
+        Test that validate_cache=True detects when new files are added.
+
+        This test:
+        1. Creates initial files in Azure
+        2. Creates a cached file list
+        3. Verifies cache is used on second load
+        4. Adds a new file to Azure
+        5. Verifies cache is invalidated with validate_cache=True
+        6. Cleans up all test files
+        """
+        from filestag import FileSource, FileSink
+
+        # Use a unique prefix for this test to avoid conflicts
+        test_prefix = f"cache_test_{int(time.time())}"
+        test_path = get_connection_string(path=test_prefix)
+        cache_file = os.path.join(temp_dir, "azure_cache.json")
+
+        # Create a sink for uploading test files
+        sink = FileSink.with_target(get_connection_string())
+
+        try:
+            # Step 1: Upload initial test files
+            initial_files = [f"{test_prefix}/file1.txt", f"{test_prefix}/file2.txt"]
+            for filename in initial_files:
+                sink.store(filename, f"content of {filename}".encode())
+
+            time.sleep(1)  # Allow Azure to propagate
+
+            # Step 2: Create initial cached file list
+            source1 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+            )
+            initial_count = len(source1.file_list)
+            assert initial_count == 2, f"Expected 2 files, got {initial_count}"
+            source1.close()
+
+            # Verify cache file was created
+            assert os.path.exists(cache_file), "Cache file should exist"
+
+            # Step 3: Load from cache (should be fast, no Azure call for file list)
+            source2 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+                validate_cache=False,  # Don't validate, just use cache
+            )
+            assert len(source2.file_list) == 2, "Should load 2 files from cache"
+            source2.close()
+
+            # Step 4: Add a new file to Azure
+            new_file = f"{test_prefix}/file3_new.txt"
+            sink.store(new_file, b"new file content")
+            time.sleep(1)  # Allow Azure to propagate
+
+            # Step 5a: Without validation, cache is stale (still shows 2 files)
+            source3 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+                validate_cache=False,
+            )
+            assert len(source3.file_list) == 2, "Without validation, cache shows old count"
+            source3.close()
+
+            # Step 5b: With validation, cache should be invalidated and refreshed
+            source4 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+                validate_cache=True,  # Enable validation!
+            )
+            assert len(source4.file_list) == 3, f"With validation, should detect new file. Got {len(source4.file_list)}"
+            source4.close()
+
+            # Step 6: Verify cache was updated
+            source5 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+                validate_cache=False,
+            )
+            assert len(source5.file_list) == 3, "Updated cache should have 3 files"
+            source5.close()
+
+        finally:
+            # Cleanup: Delete all test files from Azure
+            cleanup_source = FileSource.from_source(
+                get_connection_string(),
+                search_path=test_prefix,
+                fetch_file_list=True,
+            )
+            for entry in cleanup_source.file_list:
+                try:
+                    # Delete using the container client
+                    from filestag.azure.source import AzureStorageFileSource
+                    if isinstance(cleanup_source, AzureStorageFileSource):
+                        blob_client = cleanup_source.container_client.get_blob_client(
+                            cleanup_source.search_path + entry.filename
+                        )
+                        blob_client.delete_blob()
+                except Exception:
+                    pass  # Best effort cleanup
+            cleanup_source.close()
+
+    def test_cache_validation_detects_deleted_files(self, temp_dir):
+        """Test that validate_cache=True detects when files are deleted."""
+        from filestag import FileSource, FileSink
+
+        test_prefix = f"cache_del_test_{int(time.time())}"
+        test_path = get_connection_string(path=test_prefix)
+        cache_file = os.path.join(temp_dir, "azure_cache_del.json")
+
+        sink = FileSink.with_target(get_connection_string())
+
+        try:
+            # Upload initial files
+            files_to_create = [
+                f"{test_prefix}/keep.txt",
+                f"{test_prefix}/delete_me.txt",
+            ]
+            for filename in files_to_create:
+                sink.store(filename, f"content of {filename}".encode())
+
+            time.sleep(1)
+
+            # Create cached file list
+            source1 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+            )
+            assert len(source1.file_list) == 2
+            source1.close()
+
+            # Delete one file from Azure
+            from filestag.azure.source import AzureStorageFileSource
+            delete_source = FileSource.from_source(get_connection_string())
+            if isinstance(delete_source, AzureStorageFileSource):
+                blob_client = delete_source.container_client.get_blob_client(
+                    f"{test_prefix}/delete_me.txt"
+                )
+                blob_client.delete_blob()
+            delete_source.close()
+
+            time.sleep(1)
+
+            # With validation, should detect the deletion
+            source2 = FileSource.from_source(
+                test_path,
+                file_list_name=cache_file,
+                fetch_file_list=True,
+                validate_cache=True,
+            )
+            assert len(source2.file_list) == 1, f"Should detect deletion. Got {len(source2.file_list)}"
+            source2.close()
+
+        finally:
+            # Cleanup
+            cleanup_source = FileSource.from_source(
+                get_connection_string(),
+                search_path=test_prefix,
+                fetch_file_list=True,
+            )
+            for entry in cleanup_source.file_list:
+                try:
+                    from filestag.azure.source import AzureStorageFileSource
+                    if isinstance(cleanup_source, AzureStorageFileSource):
+                        blob_client = cleanup_source.container_client.get_blob_client(
+                            cleanup_source.search_path + entry.filename
+                        )
+                        blob_client.delete_blob()
+                except Exception:
+                    pass
+            cleanup_source.close()
