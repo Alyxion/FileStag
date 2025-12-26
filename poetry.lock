@@ -1682,7 +1682,7 @@ version = "1.2.1"
 description = "Read key-value pairs from a .env file and set them as environment variables"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "python_dotenv-1.2.1-py3-none-any.whl", hash = "sha256:b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61"},
     {file = "python_dotenv-1.2.1.tar.gz", hash = "sha256:42667e897e16ab0d66954af0e60a9caa94f0fd4ecf3aaf6d2d260eec1aa36ad6"},
@@ -1934,9 +1934,9 @@ propcache = ">=0.2.1"
 [extras]
 all = ["aiohttp", "azure-storage-blob"]
 azure = ["aiohttp", "azure-storage-blob"]
-dev = ["mypy", "pytest", "pytest-asyncio", "pytest-cov", "ruff"]
+dev = ["mypy", "pytest", "pytest-asyncio", "pytest-cov", "python-dotenv", "ruff"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.12,<4"
-content-hash = "bd51fad8cbfcdadb213ff9b62244ce65f02bd0622c86c4f95ca2ebe1689ef8e7"
+python-versions = ">=3.12"
+content-hash = "40c5785ab594302fc37d932712ead2d04a7edc582362eb40a5d65ffea8ab7054"
