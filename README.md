@@ -7,7 +7,7 @@
 
 **FileStag** is a high-performance, unified file access library for Python. It provides a consistent API for reading, writing, and managing files across different storage backends—including the local filesystem, ZIP archives, HTTP/HTTPS URLs, and Azure Blob Storage.
 
-Extracted from the [SciStag](https://github.com/scistag/scistag) framework, FileStag is designed to be lightweight, efficient, and developer-friendly.
+FileStag is designed to be lightweight, efficient, and developer-friendly.
 
 ## Key Features
 

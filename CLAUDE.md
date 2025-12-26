@@ -42,7 +42,9 @@ filestag/
 │   ├── __init__.py
 │   ├── blob_path.py         # AzureBlobPath
 │   ├── source.py            # AzureStorageFileSource
-│   └── sink.py              # AzureStorageFileSink
+│   ├── sink.py              # AzureStorageFileSink
+│   ├── async_source.py      # AsyncAzureStorageFileSource
+│   └── async_sink.py        # AsyncAzureStorageFileSink
 └── cache/
     ├── __init__.py
     ├── cache.py             # Cache class
@@ -56,6 +58,8 @@ filestag/
 - **FileStag**: High-level API for load/save/copy/delete operations
 - **FileSource**: Base class for reading files, supports iteration
 - **FileSink**: Base class for writing files
+- **AsyncAzureStorageFileSource**: Async Azure blob source (uses `azure.storage.blob.aio`)
+- **AsyncAzureStorageFileSink**: Async Azure blob sink (uses `azure.storage.blob.aio`)
 - **Cache/DiskCache**: Caching utilities with versioning support
 - **WebCache**: HTTP file caching with TTL
 
@@ -103,8 +107,9 @@ Core:
 - pydantic (>=2.0.0) - Data validation
 - requests (>=2.28.0) - HTTP requests
 
-Optional:
+Optional (azure):
 - azure-storage-blob (>=12.0.0) - Azure Blob Storage support
+- aiohttp (>=3.8.0) - Required for async Azure operations
 
 Dev:
 - pytest, mypy, ruff

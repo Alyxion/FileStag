@@ -621,3 +621,489 @@ class TestAzureCacheValidation:
                 except Exception:
                     pass
             cleanup_source.close()
+
+
+@pytest.mark.skipif(not AZURE_CONFIGURED, reason="Azure credentials not configured")
+class TestAsyncAzureStorageFileSource:
+    """Tests for AsyncAzureStorageFileSource using azure.storage.blob.aio."""
+
+    @pytest.mark.asyncio
+    async def test_async_source_context_manager(self):
+        """Test async source works as context manager."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        async with AsyncAzureStorageFileSource(
+            get_connection_string()
+        ) as source:
+            assert source is not None
+            assert source._container_client is not None
+
+    @pytest.mark.asyncio
+    async def test_async_source_list_files(self, azure_test_sink):
+        """Test async listing files from Azure."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        # Upload test files
+        test_prefix = f"async_list_{int(time.time())}"
+        for i in range(3):
+            azure_test_sink.store(f"{test_prefix}/file_{i}.txt", f"content {i}".encode())
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix)
+            ) as source:
+                files = await source.get_file_list()
+                assert len(files) == 3
+                filenames = [f.filename for f in files]
+                for i in range(3):
+                    assert f"file_{i}.txt" in filenames
+        finally:
+            # Cleanup
+            from filestag.azure import AsyncAzureStorageFileSource as Source
+            async with Source(get_connection_string()) as cleanup:
+                for i in range(3):
+                    blob = cleanup.container_client.get_blob_client(
+                        f"{test_prefix}/file_{i}.txt"
+                    )
+                    try:
+                        await blob.delete_blob()
+                    except Exception:
+                        pass
+
+    @pytest.mark.asyncio
+    async def test_async_source_read_file(self, azure_test_sink):
+        """Test async reading a file from Azure."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_name = f"async_read_{int(time.time())}.txt"
+        test_data = b"Async read test content"
+        azure_test_sink.store(test_name, test_data)
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string()
+            ) as source:
+                data = await source.read_file(test_name)
+                assert data == test_data
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(test_name)
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_source_read_nonexistent(self):
+        """Test async reading a non-existent file returns None."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        async with AsyncAzureStorageFileSource(
+            get_connection_string()
+        ) as source:
+            data = await source.read_file("nonexistent_file_xyz_123.txt")
+            assert data is None
+
+    @pytest.mark.asyncio
+    async def test_async_source_exists(self, azure_test_sink):
+        """Test async file existence check."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_name = f"async_exists_{int(time.time())}.txt"
+        azure_test_sink.store(test_name, b"exists test")
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string()
+            ) as source:
+                assert await source.exists(test_name)
+                assert not await source.exists("nonexistent_xyz.txt")
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(test_name)
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_source_iteration(self, azure_test_sink):
+        """Test async iteration over files."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_prefix = f"async_iter_{int(time.time())}"
+        for i in range(3):
+            azure_test_sink.store(f"{test_prefix}/iter_{i}.txt", f"iter {i}".encode())
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix)
+            ) as source:
+                count = 0
+                async for entry in source:
+                    assert entry.filename is not None
+                    assert entry.file_size is not None
+                    count += 1
+                assert count == 3
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                for i in range(3):
+                    blob = cleanup.container_client.get_blob_client(
+                        f"{test_prefix}/iter_{i}.txt"
+                    )
+                    try:
+                        await blob.delete_blob()
+                    except Exception:
+                        pass
+
+    @pytest.mark.asyncio
+    async def test_async_source_with_mask(self, azure_test_sink):
+        """Test async source with file mask filtering."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_prefix = f"async_mask_{int(time.time())}"
+        azure_test_sink.store(f"{test_prefix}/file.txt", b"txt file")
+        azure_test_sink.store(f"{test_prefix}/file.json", b"json file")
+        azure_test_sink.store(f"{test_prefix}/data.txt", b"data txt")
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix),
+                mask="*.txt",
+            ) as source:
+                files = await source.get_file_list()
+                assert len(files) == 2
+                for f in files:
+                    assert f.filename.endswith(".txt")
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                for name in ["file.txt", "file.json", "data.txt"]:
+                    blob = cleanup.container_client.get_blob_client(
+                        f"{test_prefix}/{name}"
+                    )
+                    try:
+                        await blob.delete_blob()
+                    except Exception:
+                        pass
+
+    @pytest.mark.asyncio
+    async def test_async_source_max_file_count(self, azure_test_sink):
+        """Test async source with max_file_count limit."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_prefix = f"async_limit_{int(time.time())}"
+        for i in range(5):
+            azure_test_sink.store(f"{test_prefix}/file_{i}.txt", f"content {i}".encode())
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix),
+                max_file_count=2,
+            ) as source:
+                files = await source.get_file_list()
+                assert len(files) == 2
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                for i in range(5):
+                    blob = cleanup.container_client.get_blob_client(
+                        f"{test_prefix}/file_{i}.txt"
+                    )
+                    try:
+                        await blob.delete_blob()
+                    except Exception:
+                        pass
+
+
+@pytest.mark.skipif(not AZURE_CONFIGURED, reason="Azure credentials not configured")
+class TestAsyncAzureStorageFileSink:
+    """Tests for AsyncAzureStorageFileSink using azure.storage.blob.aio."""
+
+    @pytest.mark.asyncio
+    async def test_async_sink_context_manager(self):
+        """Test async sink works as context manager."""
+        from filestag.azure import AsyncAzureStorageFileSink
+
+        async with AsyncAzureStorageFileSink(
+            get_connection_string()
+        ) as sink:
+            assert sink is not None
+            assert sink._container_client is not None
+
+    @pytest.mark.asyncio
+    async def test_async_sink_store(self):
+        """Test async storing a file."""
+        from filestag.azure import AsyncAzureStorageFileSink, AsyncAzureStorageFileSource
+
+        test_name = f"async_store_{int(time.time())}.txt"
+        test_data = b"Async store test content"
+
+        try:
+            async with AsyncAzureStorageFileSink(
+                get_connection_string()
+            ) as sink:
+                result = await sink.store(test_name, test_data)
+                assert result is True
+
+            # Verify file was stored
+            import asyncio
+            await asyncio.sleep(1)
+
+            async with AsyncAzureStorageFileSource(
+                get_connection_string()
+            ) as source:
+                data = await source.read_file(test_name)
+                assert data == test_data
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(test_name)
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_sink_store_text(self):
+        """Test async storing text content."""
+        from filestag.azure import AsyncAzureStorageFileSink, AsyncAzureStorageFileSource
+
+        test_name = f"async_text_{int(time.time())}.txt"
+        test_text = "Hello from async FileStag!"
+
+        try:
+            async with AsyncAzureStorageFileSink(
+                get_connection_string()
+            ) as sink:
+                result = await sink.store_text(test_name, test_text)
+                assert result is True
+
+            import asyncio
+            await asyncio.sleep(1)
+
+            async with AsyncAzureStorageFileSource(
+                get_connection_string()
+            ) as source:
+                data = await source.read_file(test_name)
+                assert data.decode("utf-8") == test_text
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(test_name)
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_sink_overwrite(self):
+        """Test async overwrite behavior."""
+        from filestag.azure import AsyncAzureStorageFileSink
+
+        test_name = f"async_overwrite_{int(time.time())}.txt"
+
+        try:
+            async with AsyncAzureStorageFileSink(
+                get_connection_string()
+            ) as sink:
+                # First store
+                await sink.store(test_name, b"original")
+
+                # Overwrite should succeed
+                result = await sink.store(test_name, b"updated", overwrite=True)
+                assert result is True
+
+                # No overwrite should fail
+                result = await sink.store(test_name, b"blocked", overwrite=False)
+                assert result is False
+        finally:
+            async with AsyncAzureStorageFileSink(get_connection_string()) as cleanup:
+                try:
+                    await cleanup.delete(test_name)
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_sink_delete(self):
+        """Test async file deletion."""
+        from filestag.azure import AsyncAzureStorageFileSink
+
+        test_name = f"async_delete_{int(time.time())}.txt"
+
+        async with AsyncAzureStorageFileSink(
+            get_connection_string()
+        ) as sink:
+            # Store file
+            await sink.store(test_name, b"delete me")
+            assert await sink.exists(test_name)
+
+            # Delete file
+            result = await sink.delete(test_name)
+            assert result is True
+
+            # Verify deletion
+            assert not await sink.exists(test_name)
+
+    @pytest.mark.asyncio
+    async def test_async_sink_exists(self):
+        """Test async file existence check."""
+        from filestag.azure import AsyncAzureStorageFileSink
+
+        test_name = f"async_sink_exists_{int(time.time())}.txt"
+
+        try:
+            async with AsyncAzureStorageFileSink(
+                get_connection_string()
+            ) as sink:
+                # File doesn't exist yet
+                assert not await sink.exists(test_name)
+
+                # Store file
+                await sink.store(test_name, b"exists test")
+
+                # File should exist now
+                assert await sink.exists(test_name)
+        finally:
+            async with AsyncAzureStorageFileSink(get_connection_string()) as cleanup:
+                try:
+                    await cleanup.delete(test_name)
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_sink_with_subfolder(self):
+        """Test async sink with subfolder."""
+        from filestag.azure import AsyncAzureStorageFileSink, AsyncAzureStorageFileSource
+
+        test_prefix = f"async_sub_{int(time.time())}"
+        test_name = "file.txt"
+        test_data = b"Subfolder test content"
+
+        try:
+            async with AsyncAzureStorageFileSink(
+                get_connection_string(),
+                sub_folder=test_prefix,
+            ) as sink:
+                result = await sink.store(test_name, test_data)
+                assert result is True
+
+            import asyncio
+            await asyncio.sleep(1)
+
+            # Verify file is in subfolder
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix)
+            ) as source:
+                files = await source.get_file_list()
+                assert len(files) == 1
+                assert files[0].filename == test_name
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(
+                    f"{test_prefix}/{test_name}"
+                )
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_async_sink_delete_nonexistent(self):
+        """Test async deleting a non-existent file returns False."""
+        from filestag.azure import AsyncAzureStorageFileSink
+
+        async with AsyncAzureStorageFileSink(
+            get_connection_string()
+        ) as sink:
+            result = await sink.delete("nonexistent_file_xyz_123.txt")
+            assert result is False
+
+
+@pytest.mark.skipif(not AZURE_CONFIGURED, reason="Azure credentials not configured")
+class TestAsyncAzureEndToEnd:
+    """End-to-end tests combining async source and sink."""
+
+    @pytest.mark.asyncio
+    async def test_async_upload_download_cycle(self):
+        """Test complete async upload and download cycle."""
+        from filestag.azure import AsyncAzureStorageFileSink, AsyncAzureStorageFileSource
+
+        test_prefix = f"async_e2e_{int(time.time())}"
+        files = {
+            "file1.txt": b"Content of file 1",
+            "file2.json": b'{"key": "value"}',
+            "file3.bin": bytes(range(256)),
+        }
+
+        try:
+            # Upload all files
+            async with AsyncAzureStorageFileSink(
+                get_connection_string(),
+                sub_folder=test_prefix,
+            ) as sink:
+                for name, data in files.items():
+                    result = await sink.store(name, data)
+                    assert result is True
+
+            import asyncio
+            await asyncio.sleep(1)
+
+            # Download and verify all files
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix)
+            ) as source:
+                file_list = await source.get_file_list()
+                assert len(file_list) == 3
+
+                for entry in file_list:
+                    data = await source.read_file(entry.filename)
+                    assert data == files[entry.filename]
+        finally:
+            # Cleanup
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                for name in files:
+                    blob = cleanup.container_client.get_blob_client(
+                        f"{test_prefix}/{name}"
+                    )
+                    try:
+                        await blob.delete_blob()
+                    except Exception:
+                        pass
+
+    @pytest.mark.asyncio
+    async def test_async_latest_modified_timestamp(self, azure_test_sink):
+        """Test getting the latest modified timestamp asynchronously."""
+        from filestag.azure import AsyncAzureStorageFileSource
+
+        test_prefix = f"async_ts_{int(time.time())}"
+        azure_test_sink.store(f"{test_prefix}/file.txt", b"test content")
+
+        time.sleep(1)
+
+        try:
+            async with AsyncAzureStorageFileSource(
+                get_connection_string(path=test_prefix)
+            ) as source:
+                timestamp = await source.get_latest_modified_timestamp()
+                assert timestamp is not None
+                # Should be a valid ISO format timestamp
+                from datetime import datetime
+                datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        finally:
+            async with AsyncAzureStorageFileSource(get_connection_string()) as cleanup:
+                blob = cleanup.container_client.get_blob_client(
+                    f"{test_prefix}/file.txt"
+                )
+                try:
+                    await blob.delete_blob()
+                except Exception:
+                    pass
